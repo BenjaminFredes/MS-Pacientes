@@ -1,535 +1,558 @@
 #!/usr/bin/env python3
 """
-AMVISIONARY – Luxury Streetwear Cinematic Ad Generator
-========================================================
-Genera un video publicitario cinematográfico de 20 segundos
-optimizado para TikTok Ads, Instagram Reels y Meta Ads.
+AMVISIONARY – Luxury Streetwear Cinematic Ad Generator  v3.0
+=============================================================
+Genera un video publicitario cinematográfico de ~20 s.
+Formato: Vertical 9:16  |  1080×1920  |  30 fps
 
-Formato: Vertical 9:16  |  Resolución: 1080x1920  |  30 fps
+Contenido real de cada imagen (tras EXIF correction):
+  img1.jpg  →  Jeans moto acid wash con paneles de costura
+  img2.jpg  →  Jacket velvet negro (outfit completo)
+  img3.jpg  →  Bomber camo abstracto
+  img4.jpg  →  Jeans grises stacked (close-up impactante)
+  img5.jpg  →  Hoodie crema con bordado azteca (espalda)
 
 USO:
-    1. Coloca las 5 fotos en la carpeta  images/
-       - img1.jpg  →  Jeans grises stacked (close-up frontal)
-       - img2.jpg  →  Jacket velvet negro (outfit completo)
-       - img3.jpg  →  Jeans moto acid wash (frontal)
-       - img4.jpg  →  Hoodie crema con bordado (espalda)
-       - img5.jpg  →  Bomber camo abstracto (outfit)
-    2. Ejecuta:  python3 generate_video.py
-    3. El video se guarda en:  output/AMVISIONARY_AD.mp4
+    python3 generate_video.py
+    → output/AMVISIONARY_AD.mp4
 """
 
-import os
-import sys
-import math
+import os, sys, math
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
-import imageio
-import imageio_ffmpeg
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageOps
 
-# ──────────────────────────────────────────────
-#  CONFIGURACIÓN GLOBAL
-# ──────────────────────────────────────────────
-WIDTH, HEIGHT = 1080, 1920          # 9:16 vertical
-FPS = 30
-OUTPUT_PATH = "output/AMVISIONARY_AD.mp4"
-IMAGES_DIR = "images"
+# ─────────────────────────────────────────────────────────────
+#  CONFIGURACIÓN
+# ─────────────────────────────────────────────────────────────
+W, H   = 1080, 1920
+FPS    = 30
+OUTPUT = "output/AMVISIONARY_AD.mp4"
+IMGDIR = "images"
 
-# Paleta de colores luxury
-BLACK        = (0, 0, 0)
-WHITE        = (255, 255, 255)
-GOLD         = (212, 175, 55)
-CREAM        = (245, 240, 230)
-DARK_GRAY    = (18, 18, 18)
-MID_GRAY     = (35, 35, 35)
-SILVER       = (192, 192, 192)
+WHITE  = (255, 255, 255)
+BLACK  = (0,   0,   0  )
+GOLD   = (212, 175,  55)
+SILVER = (210, 210, 210)
 
-# ──────────────────────────────────────────────
-#  FUENTES  (usa fallback si no hay TTF externo)
-# ──────────────────────────────────────────────
-def get_font(size, bold=False):
-    """Carga una fuente del sistema o usa la fuente PIL por defecto."""
+# ─────────────────────────────────────────────────────────────
+#  FUENTES
+# ─────────────────────────────────────────────────────────────
+def fnt(size, bold=True):
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
     ]
     if not bold:
-        candidates = [p.replace("Bold", "").replace("-Bold", "") for p in candidates] + candidates
-    for path in candidates:
-        if os.path.exists(path):
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ] + candidates
+    for p in candidates:
+        if os.path.exists(p):
             try:
-                return ImageFont.truetype(path, size)
+                return ImageFont.truetype(p, size)
             except Exception:
-                continue
+                pass
     return ImageFont.load_default()
 
-# ──────────────────────────────────────────────
-#  UTILIDADES DE IMAGEN
-# ──────────────────────────────────────────────
-def load_and_fit(path, target_w=WIDTH, target_h=HEIGHT):
-    """Carga imagen y la redimensiona para cubrir el frame (cover crop)."""
+# ─────────────────────────────────────────────────────────────
+#  CARGA DE IMÁGENES
+# ─────────────────────────────────────────────────────────────
+def load_image(path: str) -> Image.Image:
+    """
+    Carga la imagen aplicando EXIF rotation, recorte inteligente a 9:16
+    y un 14% de margen extra para el efecto Ken Burns.
+    """
     img = Image.open(path).convert("RGB")
+    img = ImageOps.exif_transpose(img)   # ← crítico: corrige rotación EXIF
+
     iw, ih = img.size
-    scale = max(target_w / iw, target_h / ih) * 1.15   # 15 % extra para zoom
-    nw = int(iw * scale)
-    nh = int(ih * scale)
-    img = img.resize((nw, nh), Image.LANCZOS)
-    # Centro crop
-    x = (nw - target_w) // 2
-    y = (nh - target_h) // 2
-    return img.crop((x, y, x + target_w, y + target_h))
+    target = W / H   # 0.5625
+
+    # Recortar al ratio 9:16 centrando en el sujeto
+    if iw / ih > target:
+        # Más ancho que 9:16 → recortar lados
+        new_w = int(ih * target)
+        x = (iw - new_w) // 2
+        img = img.crop((x, 0, x + new_w, ih))
+    elif iw / ih < target * 0.9:
+        # Mucho más alto que 9:16 → recortar arriba/abajo (queda centrado)
+        new_h = int(iw / target)
+        y = (ih - new_h) // 2
+        img = img.crop((0, y, iw, y + new_h))
+
+    # Resize al frame final y ampliar 14% para margen de movimiento
+    pad = 0.14
+    nw  = int(W * (1 + pad))
+    nh  = int(H * (1 + pad))
+    return img.resize((nw, nh), Image.LANCZOS)
 
 
-def color_grade_luxury(img: Image.Image) -> Image.Image:
-    """Aplica color grading dark luxury premium."""
+# ─────────────────────────────────────────────────────────────
+#  COLOR GRADING  (luxury suave – ropa visible y atractiva)
+# ─────────────────────────────────────────────────────────────
+def grade(img: Image.Image) -> Image.Image:
     arr = np.array(img, dtype=np.float32)
 
-    # Crush shadows ligeramente
-    arr = arr * 0.88 + 8
+    # Lift suave de sombras (nunca crushed)
+    arr = np.clip(arr * 0.96 + 5, 0, 255)
 
-    # Lift rojos/magentas en highlights (tono cine)
-    arr[:, :, 0] = np.clip(arr[:, :, 0] * 1.04, 0, 255)   # R  ↑
-    arr[:, :, 1] = np.clip(arr[:, :, 1] * 0.97, 0, 255)   # G  ↓
-    arr[:, :, 2] = np.clip(arr[:, :, 2] * 1.08, 0, 255)   # B  ↑ (tono frío premium)
+    # Tinte cine frío discreto (look fashion editado)
+    arr[:, :, 0] = np.clip(arr[:, :, 0] * 1.01,  0, 255)   # R  +1 %
+    arr[:, :, 1] = np.clip(arr[:, :, 1] * 0.985, 0, 255)   # G  −1.5 %
+    arr[:, :, 2] = np.clip(arr[:, :, 2] * 1.03,  0, 255)   # B  +3 %
 
     img = Image.fromarray(arr.astype(np.uint8))
-
-    # Reducir saturación para look de moda
-    enhancer = ImageEnhance.Color(img)
-    img = enhancer.enhance(0.82)
-
-    # Contraste premium
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(1.18)
-
-    # Nitidez suave
-    enhancer = ImageEnhance.Sharpness(img)
-    img = enhancer.enhance(1.25)
-
+    img = ImageEnhance.Color(img).enhance(0.90)       # desaturación suave
+    img = ImageEnhance.Contrast(img).enhance(1.08)    # contraste mínimo
+    img = ImageEnhance.Sharpness(img).enhance(1.15)   # nitidez
     return img
 
 
-def vignette(img: Image.Image, strength=0.55) -> Image.Image:
-    """Agrega viñeta cinematográfica."""
-    w, h = img.size
-    mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask)
-    # Gradiente radial desde el centro
-    cx, cy = w // 2, h // 2
-    max_r = math.sqrt(cx**2 + cy**2)
-    for r in range(int(max_r), 0, -2):
-        alpha = int(255 * strength * (r / max_r) ** 2.2)
-        draw.ellipse(
-            [cx - r, cy - r, cx + r, cy + r],
-            fill=min(alpha, 220),
-            outline=None,
-        )
-    black = Image.new("RGB", (w, h), (0, 0, 0))
-    img = img.copy()
-    img.paste(black, mask=ImageOps.invert(mask))
-    return img
+# ─────────────────────────────────────────────────────────────
+#  VIÑETA  (solo sutil, no destruye la imagen)
+# ─────────────────────────────────────────────────────────────
+def vignette(img: Image.Image, strength: float = 0.22) -> Image.Image:
+    nw, nh = img.size
+    cx, cy = nw / 2, nh / 2
+    Y, X   = np.ogrid[:nh, :nw]
+    dist   = np.sqrt(((X - cx) / cx) ** 2 + ((Y - cy) / cy) ** 2)
+    mask   = np.clip(dist ** 2.2 * strength, 0, 1)
+    arr    = np.array(img, dtype=np.float32)
+    result = arr * (1 - mask[:, :, np.newaxis])
+    return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
 
 
-def overlay_dark(img: Image.Image, alpha=0.32) -> Image.Image:
-    """Oscurece con overlay negro semitransparente."""
-    dark = Image.new("RGB", img.size, (0, 0, 0))
-    return Image.blend(img, dark, alpha)
-
-
-def draw_centered_text(
-    draw, y, text, font, color=WHITE, letter_spacing=6, shadow=True
-):
-    """Dibuja texto centrado con sombra y letter-spacing simulado."""
-    # Separar caracteres para letter-spacing manual
-    chars = list(text)
-    widths = []
-    for c in chars:
-        bbox = font.getbbox(c)
-        widths.append(bbox[2] - bbox[0] + letter_spacing)
-    total_w = sum(widths)
-    x = (WIDTH - total_w) // 2
-
-    for i, c in enumerate(chars):
-        cx = x + sum(widths[:i])
-        if shadow:
-            draw.text((cx + 3, y + 3), c, font=font, fill=(0, 0, 0, 160))
-        draw.text((cx, y), c, font=font, fill=color)
-
-
-def draw_line(draw, y, color=GOLD, width=2, margin=80):
-    draw.line([(margin, y), (WIDTH - margin, y)], fill=color, width=width)
-
-
-# ──────────────────────────────────────────────
-#  EFECTOS DE MOVIMIENTO  (Ken Burns)
-# ──────────────────────────────────────────────
-def ken_burns_frame(base_img: Image.Image, progress: float, mode="zoom_in") -> Image.Image:
+# ─────────────────────────────────────────────────────────────
+#  GRADIENTE INFERIOR  (solo debajo del texto, no toca la prenda)
+# ─────────────────────────────────────────────────────────────
+def bottom_grad(img: Image.Image,
+                strength: float = 0.80,
+                start_pct: float = 0.58) -> Image.Image:
     """
-    Genera un frame con efecto Ken Burns.
-    progress: 0.0 → 1.0
-    modes: zoom_in | zoom_out | pan_left | pan_right | pan_up
+    Oscurece SOLO la franja inferior (start_pct % desde arriba hacia abajo).
+    La prenda queda completamente visible en el 58% superior.
     """
-    w, h = base_img.size
-    # La base ya tiene 15% extra para el movimiento
-    extra = 0.12   # cuánto se puede mover
+    nw, nh = img.size
+    arr    = np.array(img, dtype=np.float32)
+    start  = int(nh * start_pct)
 
-    if mode == "zoom_in":
-        scale = 1.0 - extra * progress      # comienza grande, termina 1:1
-        off_x, off_y = 0, 0
-    elif mode == "zoom_out":
-        scale = 1.0 - extra * (1 - progress)
-        off_x, off_y = 0, 0
-    elif mode == "pan_left":
-        scale = 1.0 - extra * 0.5
-        off_x = extra * progress
-        off_y = 0
-    elif mode == "pan_right":
-        scale = 1.0 - extra * 0.5
-        off_x = -extra * progress
-        off_y = 0
-    elif mode == "pan_up":
-        scale = 1.0 - extra * 0.5
-        off_x = 0
-        off_y = extra * progress
-    else:
-        scale, off_x, off_y = 1.0, 0, 0
+    rows = np.arange(start, nh)
+    t    = (rows - start) / max(nh - start, 1)
+    alpha = np.clip(t ** 0.75 * strength, 0, strength)   # curva suave
 
-    # Recortar region visible
-    view_w = int(WIDTH * scale)
-    view_h = int(HEIGHT * scale)
-    start_x = int((w - view_w) * (0.5 + off_x))
-    start_y = int((h - view_h) * (0.5 + off_y))
-    start_x = max(0, min(start_x, w - view_w))
-    start_y = max(0, min(start_y, h - view_h))
-
-    cropped = base_img.crop((start_x, start_y, start_x + view_w, start_y + view_h))
-    return cropped.resize((WIDTH, HEIGHT), Image.LANCZOS)
+    arr[start:] = arr[start:] * (1 - alpha[:, np.newaxis, np.newaxis])
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
-def ease_in_out(t):
-    """Curva de ease-in-out suave (sigmoid-like)."""
+# ─────────────────────────────────────────────────────────────
+#  KEN BURNS
+# ─────────────────────────────────────────────────────────────
+def ease(t: float) -> float:
     return t * t * (3 - 2 * t)
 
 
-# ──────────────────────────────────────────────
-#  COMPOSITOR DE TEXTOS POR ESCENA
-# ──────────────────────────────────────────────
-def add_scene_text(img: Image.Image, scene: int, alpha: float) -> Image.Image:
-    """
-    Agrega textos y branding según la escena.
-    alpha: 0.0→1.0 para fade in/out del texto.
-    """
-    img = img.copy().convert("RGBA")
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+def ken_burns(base: Image.Image, t: float, mode: str) -> Image.Image:
+    nw, nh = base.size
+    ex = nw - W   # margen disponible en X
+    ey = nh - H   # margen disponible en Y
 
-    a = int(255 * min(alpha, 1.0))
+    if   mode == "zoom_in":
+        # Comienza más alejado (usando el margen X/Y) y acerca al centro
+        ox = ease(1 - t) * ex * 0.6 + ex * 0.2
+        oy = ease(1 - t) * ey * 0.6 + ey * 0.2
+    elif mode == "zoom_out":
+        ox = ease(t) * ex * 0.6 + ex * 0.2
+        oy = ease(t) * ey * 0.6 + ey * 0.2
+    elif mode == "pan_left":
+        ox = ease(t) * ex
+        oy = ey * 0.35
+    elif mode == "pan_right":
+        ox = (1 - ease(t)) * ex
+        oy = ey * 0.35
+    elif mode == "pan_up":
+        ox = ex * 0.5
+        oy = ease(t) * ey
+    elif mode == "pan_down":
+        ox = ex * 0.5
+        oy = (1 - ease(t)) * ey
+    elif mode == "drift_tl":   # drift diagonal sutil
+        ox = (1 - ease(t)) * ex * 0.8
+        oy = (1 - ease(t)) * ey * 0.8
+    else:
+        ox, oy = ex * 0.5, ey * 0.5
 
-    if scene == 0:   # HOOK
-        # Logo AMVISIONARY arriba
-        font_logo = get_font(44, bold=True)
-        font_tag  = get_font(26, bold=False)
-        font_hook = get_font(88, bold=True)
-        font_sub  = get_font(34, bold=False)
-
-        # Línea dorada superior
-        draw.line([(60, 120), (WIDTH - 60, 120)], fill=(*GOLD, a), width=1)
-
-        # AMVISIONARY
-        draw_centered_text(draw, 132, "AMVISIONARY", font_logo,
-                           color=(*WHITE, a), letter_spacing=10)
-
-        # Tag line
-        draw_centered_text(draw, 185, "LUXURY STREETWEAR", font_tag,
-                           color=(*GOLD, a), letter_spacing=8)
-
-        draw.line([(60, 218), (WIDTH - 60, 218)], fill=(*GOLD, a), width=1)
-
-        # Hook principal – parte baja
-        draw_centered_text(draw, HEIGHT - 420, "NO ES", font_hook,
-                           color=(*WHITE, a), letter_spacing=4)
-        draw_centered_text(draw, HEIGHT - 320, "ROPA", font_hook,
-                           color=(*WHITE, a), letter_spacing=4)
-        draw_centered_text(draw, HEIGHT - 220, "COMÚN.", font_hook,
-                           color=(*GOLD, a), letter_spacing=4)
-
-    elif scene == 1:   # DETALLES PREMIUM
-        font_main = get_font(72, bold=True)
-        font_sub  = get_font(32, bold=False)
-        font_tag  = get_font(24, bold=False)
-
-        draw.line([(60, HEIGHT - 440), (WIDTH - 60, HEIGHT - 440)],
-                  fill=(*GOLD, a), width=1)
-
-        draw_centered_text(draw, HEIGHT - 420, "PREMIUM", font_main,
-                           color=(*WHITE, a), letter_spacing=8)
-        draw_centered_text(draw, HEIGHT - 335, "STREETWEAR", font_main,
-                           color=(*GOLD, a), letter_spacing=6)
-
-        draw.line([(60, HEIGHT - 290), (WIDTH - 60, HEIGHT - 290)],
-                  fill=(*SILVER, a // 2), width=1)
-
-        draw_centered_text(draw, HEIGHT - 268, "IMPORTADO  ·  EXCLUSIVO  ·  LIMITED", font_tag,
-                           color=(*SILVER, a), letter_spacing=4)
-
-        # Mini logo abajo
-        font_logo = get_font(30, bold=True)
-        draw_centered_text(draw, HEIGHT - 180, "AMVISIONARY", font_logo,
-                           color=(*GOLD, a), letter_spacing=10)
-
-    elif scene == 2:   # STOCK LIMITADO
-        font_main  = get_font(78, bold=True)
-        font_sub   = get_font(36, bold=False)
-        font_small = get_font(26, bold=False)
-
-        # Badge "STOCK LIMITADO" arriba centrado
-        badge_w, badge_h = 520, 66
-        bx = (WIDTH - badge_w) // 2
-        draw.rectangle([bx, 110, bx + badge_w, 110 + badge_h],
-                       fill=(0, 0, 0, int(a * 0.85)))
-        draw.rectangle([bx, 110, bx + badge_w, 110 + badge_h],
-                       outline=(*GOLD, a), width=1)
-        draw_centered_text(draw, 124, "⬥  STOCK LIMITADO  ⬥", font_sub,
-                           color=(*GOLD, a), letter_spacing=4)
-
-        # Texto central-bajo
-        draw_centered_text(draw, HEIGHT - 480, "AGENDANDO", font_main,
-                           color=(*WHITE, a), letter_spacing=5)
-        draw_centered_text(draw, HEIGHT - 388, "PEDIDOS.", font_main,
-                           color=(*GOLD, a), letter_spacing=5)
-
-        draw.line([(60, HEIGHT - 330), (WIDTH - 60, HEIGHT - 330)],
-                  fill=(*SILVER, a // 2), width=1)
-
-        draw_centered_text(draw, HEIGHT - 308, "PIDE ANTES DE QUE SE AGOTE", font_small,
-                           color=(*SILVER, a), letter_spacing=3)
-
-    elif scene == 3:   # NO SIGAS TENDENCIAS
-        font_main = get_font(84, bold=True)
-        font_sub  = get_font(42, bold=True)
-        font_tag  = get_font(28, bold=False)
-
-        draw_centered_text(draw, HEIGHT - 530, "NO SIGAS", font_main,
-                           color=(*WHITE, a), letter_spacing=4)
-        draw_centered_text(draw, HEIGHT - 430, "TENDENCIAS.", font_sub,
-                           color=(*SILVER, a), letter_spacing=6)
-
-        # Línea diagonal decorativa
-        draw.line([(WIDTH // 2 - 220, HEIGHT - 370),
-                   (WIDTH // 2 + 220, HEIGHT - 370)],
-                  fill=(*GOLD, a), width=2)
-
-        draw_centered_text(draw, HEIGHT - 345, "IMPÓNLAS.", font_main,
-                           color=(*GOLD, a), letter_spacing=4)
-
-        draw.line([(60, HEIGHT - 270), (WIDTH - 60, HEIGHT - 270)],
-                  fill=(*GOLD, a // 2), width=1)
-        draw_centered_text(draw, HEIGHT - 245, "AMVISIONARY", get_font(32, bold=True),
-                           color=(*WHITE, a), letter_spacing=10)
-
-    elif scene == 4:   # FINAL ÉPICO
-        font_brand = get_font(96, bold=True)
-        font_cta   = get_font(46, bold=True)
-        font_sub   = get_font(28, bold=False)
-        font_small = get_font(22, bold=False)
-
-        # Overlay oscuro adicional para el final
-        dark_rect = Image.new("RGBA", img.size, (0, 0, 0, int(a * 0.5)))
-        img = Image.alpha_composite(img, dark_rect)
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-
-        # Líneas decorativas
-        for offset in [-3, 0, 3]:
-            draw.line([(60, HEIGHT // 2 - 160 + offset),
-                       (WIDTH - 60, HEIGHT // 2 - 160 + offset)],
-                      fill=(*GOLD, a // 3), width=1)
-
-        # Nombre de marca gigante
-        draw_centered_text(draw, HEIGHT // 2 - 140, "AMV", font_brand,
-                           color=(*WHITE, a), letter_spacing=12)
-        draw_centered_text(draw, HEIGHT // 2 - 30,  "ISIONARY", font_brand,
-                           color=(*GOLD, a), letter_spacing=6)
-
-        for offset in [-3, 0, 3]:
-            draw.line([(60, HEIGHT // 2 + 100 + offset),
-                       (WIDTH - 60, HEIGHT // 2 + 100 + offset)],
-                      fill=(*GOLD, a // 3), width=1)
-
-        # CTA
-        draw_centered_text(draw, HEIGHT // 2 + 130, "DM PARA ORDENAR", font_cta,
-                           color=(*WHITE, a), letter_spacing=5)
-
-        draw.line([(200, HEIGHT // 2 + 192), (WIDTH - 200, HEIGHT // 2 + 192)],
-                  fill=(*GOLD, a), width=1)
-
-        draw_centered_text(draw, HEIGHT // 2 + 210, "LIMITED DROP  ·  PIDE HOY", font_sub,
-                           color=(*GOLD, a), letter_spacing=4)
-
-        # Tagline final
-        draw_centered_text(draw, HEIGHT - 160, "@AMVISIONARY", font_small,
-                           color=(*SILVER, a // 2), letter_spacing=6)
-
-    img = Image.alpha_composite(img, overlay)
-    return img.convert("RGB")
+    ox = int(max(0, min(ox, ex)))
+    oy = int(max(0, min(oy, ey)))
+    cropped = base.crop((ox, oy, ox + W, oy + H))
+    return cropped if cropped.size == (W, H) else cropped.resize((W, H), Image.LANCZOS)
 
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+#  TEXTO CENTRADO CON PILL DE FONDO
+# ─────────────────────────────────────────────────────────────
+def text_w(text: str, f) -> int:
+    dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    bb = dummy.textbbox((0, 0), text, font=f)
+    return bb[2] - bb[0]
+
+
+def text_h(f) -> int:
+    dummy = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    bb = dummy.textbbox((0, 0), "Ag", font=f)
+    return bb[3] - bb[1]
+
+
+def draw_txt(canvas: Image.Image, text: str, y: int,
+             f, color=WHITE, bg_alpha=0,
+             spacing=6, a: float = 1.0) -> Image.Image:
+    """Texto centrado con letter-spacing simulado. bg_alpha > 0 = pill oscuro."""
+    canvas = canvas.convert("RGBA")
+
+    chars  = list(text)
+    widths = []
+    dummy  = ImageDraw.Draw(canvas)
+    for c in chars:
+        bb = dummy.textbbox((0, 0), c, font=f)
+        widths.append(bb[2] - bb[0] + spacing)
+    total_w = sum(widths)
+    ch      = text_h(f)
+    sx      = (W - total_w) // 2
+
+    if bg_alpha > 0 and total_w > 0:
+        pill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        pd   = ImageDraw.Draw(pill)
+        pad  = 16
+        pd.rounded_rectangle(
+            [sx - pad, y - 8, sx + total_w + pad, y + ch + 8],
+            radius=10,
+            fill=(0, 0, 0, int(bg_alpha * a)),
+        )
+        canvas = Image.alpha_composite(canvas, pill)
+
+    draw = ImageDraw.Draw(canvas)
+    cx = sx
+    for c, cw in zip(chars, widths):
+        # Sombra
+        draw.text((cx + 3, y + 3), c, font=f, fill=(0, 0, 0, int(160 * a)))
+        draw.text((cx,     y    ), c, font=f, fill=(*color, int(255 * a)))
+        cx += cw
+
+    return canvas
+
+
+def draw_line(canvas: Image.Image, y: int,
+              color=GOLD, margin=80, width=1, a=1.0) -> Image.Image:
+    canvas = canvas.convert("RGBA")
+    layer  = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    d.line([(margin, y), (W - margin, y)],
+           fill=(*color, int(210 * a)), width=width)
+    return Image.alpha_composite(canvas, layer)
+
+
+def draw_badge(canvas: Image.Image, text: str, cy: int,
+               f, a=1.0) -> Image.Image:
+    """Badge con borde dorado (ej: STOCK LIMITADO)."""
+    canvas  = canvas.convert("RGBA")
+    dummy   = ImageDraw.Draw(canvas)
+    tw      = text_w(text, f)
+    th      = text_h(f)
+    pad_x, pad_y = 24, 10
+    bw = tw + pad_x * 2
+    bh = th + pad_y * 2
+    bx = (W - bw) // 2
+
+    pill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    pd   = ImageDraw.Draw(pill)
+    pd.rounded_rectangle(
+        [bx, cy, bx + bw, cy + bh],
+        radius=6,
+        fill=(0, 0, 0, int(200 * a)),
+        outline=(*GOLD, int(230 * a)),
+        width=2,
+    )
+    canvas = Image.alpha_composite(canvas, pill)
+
+    draw   = ImageDraw.Draw(canvas)
+    tx     = (W - tw) // 2
+    ty     = cy + pad_y
+    draw.text((tx + 2, ty + 2), text, font=f, fill=(0, 0, 0, int(150 * a)))
+    draw.text((tx,     ty    ), text, font=f, fill=(*GOLD,  int(255 * a)))
+    return canvas
+
+
+# ─────────────────────────────────────────────────────────────
+#  TEXTOS POR ESCENA
+# ─────────────────────────────────────────────────────────────
+def add_text(img: Image.Image, scene: int, a: float) -> Image.Image:
+    if a <= 0:
+        return img
+    a = min(a, 1.0)
+    out = img.convert("RGBA")
+
+    # ─── helpers locales ───
+    def line(y, color=GOLD, margin=80, w=1):
+        nonlocal out
+        out = draw_line(out, y, color, margin, w, a)
+
+    def txt(text, y, f, color=WHITE, bg=0, sp=6):
+        nonlocal out
+        out = draw_txt(out, text, y, f, color, bg, sp, a)
+
+    def badge(text, cy, f):
+        nonlocal out
+        out = draw_badge(out, text, cy, f, a)
+
+    # ═══════════════════════════════════════════════════════════════
+    if scene == 0:
+        # ── HOOK: NO ES ROPA COMÚN ──────────────────────────────────
+        # Logo top
+        f_logo = fnt(44)
+        f_sub  = fnt(23, bold=False)
+        f_hook = fnt(88)
+
+        line(106, GOLD, 66)
+        txt("AMVISIONARY",       114,  f_logo, WHITE,  bg=0, sp=9)
+        txt("LUXURY  STREETWEAR", 166, f_sub,  GOLD,   bg=0, sp=7)
+        line(200, GOLD, 66)
+
+        # Hook inferior (texto sobre gradiente oscuro)
+        by = H - 430
+        txt("NO ES",   by,       f_hook, WHITE,  bg=170, sp=4)
+        txt("ROPA",    by + 100, f_hook, WHITE,  bg=170, sp=4)
+        txt("COMÚN.",  by + 200, f_hook, GOLD,   bg=170, sp=4)
+
+    elif scene == 1:
+        # ── PREMIUM STREETWEAR ──────────────────────────────────────
+        f_main = fnt(76)
+        f_sub  = fnt(28, bold=False)
+        f_logo = fnt(30)
+
+        by = H - 400
+        line(by - 14, GOLD)
+        txt("PREMIUM",    by,       f_main, WHITE,  bg=160, sp=6)
+        txt("STREETWEAR", by + 88,  f_main, GOLD,   bg=160, sp=5)
+        line(by + 182, SILVER, 120)
+        txt("IMPORTADO  ·  EXCLUSIVO  ·  LIMITED", by + 198, f_sub, SILVER, bg=0, sp=4)
+        txt("AMVISIONARY",                         by + 244, f_logo, GOLD,  bg=0, sp=9)
+
+    elif scene == 2:
+        # ── STOCK LIMITADO ──────────────────────────────────────────
+        f_main = fnt(80)
+        f_sub  = fnt(27, bold=False)
+
+        badge("⬥  STOCK LIMITADO  ⬥", 106, fnt(32))
+
+        by = H - 430
+        line(by - 12, GOLD)
+        txt("AGENDANDO", by,      f_main, WHITE, bg=165, sp=5)
+        txt("PEDIDOS.",  by + 92, f_main, GOLD,  bg=165, sp=5)
+        line(by + 190, SILVER, 120)
+        txt("PIDE ANTES DE QUE SE AGOTE", by + 205, f_sub, SILVER, bg=0, sp=3)
+
+    elif scene == 3:
+        # ── NO SIGAS TENDENCIAS – IMPÓNLAS ──────────────────────────
+        f_main = fnt(82)
+        f_sub  = fnt(44)
+        f_logo = fnt(32)
+
+        by = H - 500
+        txt("NO SIGAS",    by,       f_main, WHITE,  bg=165, sp=4)
+        txt("TENDENCIAS.", by + 94,  f_sub,  SILVER, bg=145, sp=5)
+        line(by + 152, GOLD, 100)
+        txt("IMPÓNLAS.",   by + 165, f_main, GOLD,   bg=165, sp=4)
+        line(by + 262, GOLD, 100)
+        txt("AMVISIONARY", by + 278, f_logo, WHITE,  bg=0,   sp=9)
+
+    elif scene == 4:
+        # ── FINAL ÉPICO ─────────────────────────────────────────────
+        f_brand = fnt(100)
+        f_cta   = fnt(48)
+        f_sub   = fnt(28, bold=False)
+        f_tag   = fnt(21, bold=False)
+
+        # El branding va en el TERCIO INFERIOR para que la prenda domine
+        by = int(H * 0.60)      # comienza al 60 % de la pantalla
+
+        line(by - 10, GOLD, 50, w=1)
+        txt("AMVISIONARY", by + 4,  f_brand, WHITE, bg=0, sp=7)
+        line(by + 114, GOLD, 50, w=1)
+
+        txt("DM PARA ORDENAR",       by + 136, f_cta, WHITE, bg=160, sp=5)
+        line(by + 202, SILVER, 180)
+        txt("LIMITED DROP  ·  PIDE HOY", by + 218, f_sub, GOLD, bg=0, sp=4)
+        txt("@AMVISIONARY",           H - 120,  f_tag, SILVER, bg=0, sp=6)
+
+    return out.convert("RGB")
+
+
+# ─────────────────────────────────────────────────────────────
 #  FLASH DE TRANSICIÓN
-# ──────────────────────────────────────────────
-def flash_frame(progress: float, style="white") -> np.ndarray:
-    """Frame de flash para transiciones. progress 0→1→0."""
-    intensity = math.sin(progress * math.pi)   # pico en 0.5
-    v = int(255 * intensity * 0.85)
-    if style == "white":
-        arr = np.full((HEIGHT, WIDTH, 3), v, dtype=np.uint8)
-    else:  # black flash
-        arr = np.full((HEIGHT, WIDTH, 3), 255 - v, dtype=np.uint8)
-    return arr
+# ─────────────────────────────────────────────────────────────
+def flash_frame(t: float, intensity=0.65) -> np.ndarray:
+    v = int(255 * math.sin(t * math.pi) * intensity)
+    return np.full((H, W, 3), v, dtype=np.uint8)
 
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 #  GENERADOR PRINCIPAL
-# ──────────────────────────────────────────────
-def generate_ad(image_paths: list):
-    """
-    Genera el video completo y lo guarda en OUTPUT_PATH.
-    image_paths: lista de 5 rutas de imagen.
-    """
-    print("═" * 60)
-    print("  AMVISIONARY — Generando Video Publicitario")
-    print("  Formato: 1080×1920  |  30 fps  |  ~20 seg")
-    print("═" * 60)
+# ─────────────────────────────────────────────────────────────
+def generate(paths: list):
+    print("═" * 62)
+    print("  AMVISIONARY — Video Ad Generator  v3.0")
+    print("  1080×1920 · 9:16 · 30 fps")
+    print("═" * 62)
 
-    # ── Cargar y pre-procesar imágenes ──
-    print("\n[1/4] Cargando y optimizando imágenes...")
+    # ── Cargar y pre-procesar ──
+    print("\n[1/4] Cargando imágenes (EXIF correction ON)...")
     bases = []
-    for i, path in enumerate(image_paths):
-        print(f"      ↳ Imagen {i+1}: {path}")
-        img = load_and_fit(path)
-        img = color_grade_luxury(img)
-        img = vignette(img)
-        bases.append(img)
+    for i, p in enumerate(paths):
+        print(f"      [{i+1}] {p}")
+        b = load_image(p)
+        b = grade(b)
+        b = vignette(b, strength=0.22)
+        bases.append(b)
 
-    # ── Definir escenas ──────────────────────────────────────────
-    # Cada escena: (imagen_idx, duración_seg, modo_ken_burns, texto_escena)
+    # ─────────────────────────────────────────────────────────
+    #  SECUENCIA DE ESCENAS  (con mapeo correcto de imágenes)
+    #
+    #  Índices tras corrección EXIF:
+    #    0 → img1 = Jeans moto acid wash (paneles)
+    #    1 → img2 = Jacket velvet negro
+    #    2 → img3 = Bomber camo abstracto
+    #    3 → img4 = Jeans stacked grises close-up   ← HERO / HOOK / FINAL
+    #    4 → img5 = Hoodie crema con bordado        ← pieza estrella
+    # ─────────────────────────────────────────────────────────
+    #  (img_idx, dur_s, kb_mode, text_scene, usar_gradiente)
     SCENES = [
-        # idx  dur   ken_burns      text_scene  dark_overlay
-        (0,    2.5,  "zoom_in",     0,          0.25),  # Hook – jeans grises stacked
-        (4,    0.4,  "pan_right",   -1,         0.15),  # Flash jacket camo
-        (1,    2.8,  "zoom_out",    1,          0.25),  # Detalles – jacket velvet
-        (2,    0.4,  "pan_left",    -1,         0.15),  # Flash moto jeans
-        (2,    2.5,  "pan_up",      2,          0.28),  # Stock limitado – moto jeans
-        (3,    0.4,  "zoom_in",     -1,         0.15),  # Flash hoodie
-        (3,    2.8,  "pan_left",    3,          0.30),  # No sigas tendencias – hoodie
-        (4,    0.4,  "zoom_out",    -1,         0.15),  # Flash bomber
-        (4,    2.5,  "zoom_in",     3,          0.30),  # Tendencias – bomber
-        (0,    0.8,  "pan_right",   -1,         0.20),  # Montaje rápido 1
-        (1,    0.6,  "zoom_out",    -1,         0.20),  # Montaje rápido 2
-        (2,    0.6,  "pan_up",      -1,         0.20),  # Montaje rápido 3
-        (0,    4.0,  "zoom_in",     4,          0.55),  # FINAL ÉPICO – dark overlay fuerte
+        # HOOK – jeans stacked grises (close-up súper impactante, llena pantalla)
+        (3,  2.6,  "zoom_in",    0,  True ),
+        # Flash cut: jacket velvet
+        (1,  0.35, "pan_right",  -1, False),
+        # Jacket velvet – PREMIUM STREETWEAR (material premium visible)
+        (1,  2.9,  "zoom_out",   1,  True ),
+        # Flash cut: moto jeans
+        (0,  0.35, "pan_left",   -1, False),
+        # Moto jeans – STOCK LIMITADO (paneles y costuras premium)
+        (0,  2.5,  "pan_up",     2,  True ),
+        # Flash cut: hoodie
+        (4,  0.35, "zoom_in",    -1, False),
+        # Hoodie crema – NO SIGAS TENDENCIAS (bordado impresionante)
+        (4,  2.9,  "zoom_out",   3,  True ),
+        # Flash cut: bomber
+        (2,  0.35, "pan_left",   -1, False),
+        # Bomber camo – IMPÓNLAS (look actitud máxima)
+        (2,  2.0,  "zoom_in",    3,  True ),
+        # Montaje rápido: 4 cortes sin texto (ritmo de música)
+        (3,  0.45, "drift_tl",   -1, False),
+        (1,  0.45, "zoom_out",   -1, False),
+        (4,  0.45, "pan_right",  -1, False),
+        (0,  0.45, "pan_up",     -1, False),
+        # FINAL ÉPICO – jeans stacked (el más fotogénico / hero image)
+        # branding en tercio inferior, prenda domina la pantalla
+        (3,  4.0,  "zoom_in",    4,  True ),
     ]
-    total_dur = sum(s[1] for s in SCENES)
+
+    total_dur    = sum(s[1] for s in SCENES)
     total_frames = int(total_dur * FPS)
-    print(f"\n[2/4] Planificando {len(SCENES)} escenas → {total_dur:.1f}s  ({total_frames} frames)")
+    print(f"\n[2/4] {len(SCENES)} escenas · {total_dur:.1f}s · {total_frames} frames")
 
-    # ── Renderizar frames ────────────────────────────────────────
-    print("\n[3/4] Renderizando frames cinematográficos...")
+    # ── Renderizar ──
+    print("\n[3/4] Renderizando frames...")
     os.makedirs("output", exist_ok=True)
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
+    import imageio
     writer = imageio.get_writer(
-        OUTPUT_PATH,
+        OUTPUT,
         fps=FPS,
         codec="libx264",
         quality=9,
         ffmpeg_log_level="quiet",
         macro_block_size=None,
-        output_params=["-crf", "18", "-preset", "slow",
+        output_params=["-crf", "16", "-preset", "slow",
                        "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
     )
 
-    frame_count = 0
-    FADE_FRAMES = int(0.18 * FPS)   # 5–6 frames de fade entre escenas
+    fc     = 0
+    FADE_F = int(0.14 * FPS)
 
-    for scene_idx, (img_i, dur, kb_mode, text_scene, dark_ov) in enumerate(SCENES):
-        n_frames = int(dur * FPS)
+    for si, (img_i, dur, kb, txt_sc, use_grad) in enumerate(SCENES):
+        nf   = max(int(dur * FPS), 1)
         base = bases[img_i]
 
-        # Overlay más oscuro para ciertos textos
-        working = overlay_dark(base, dark_ov) if dark_ov > 0.01 else base
-
-        for f in range(n_frames):
-            progress = ease_in_out(f / max(n_frames - 1, 1))
+        for f in range(nf):
+            t = ease(f / max(nf - 1, 1))
 
             # Ken Burns
-            frame_img = ken_burns_frame(working, progress, kb_mode)
+            frame = ken_burns(base, t, kb)
 
-            # Texto (fade in primeros frames, fade out últimos)
-            if text_scene >= 0:
-                fade_in_frames  = min(FADE_FRAMES * 2, n_frames // 4)
-                fade_out_frames = min(FADE_FRAMES * 2, n_frames // 4)
-                if f < fade_in_frames:
-                    txt_alpha = f / fade_in_frames
-                elif f > n_frames - fade_out_frames:
-                    txt_alpha = (n_frames - f) / fade_out_frames
+            # Gradiente inferior solo donde hay texto
+            if use_grad and txt_sc >= 0:
+                frame = bottom_grad(frame, strength=0.82, start_pct=0.56)
+
+            # Texto con fade in/out
+            if txt_sc >= 0:
+                if f < FADE_F:
+                    ta = f / FADE_F
+                elif f > nf - FADE_F:
+                    ta = (nf - f) / FADE_F
                 else:
-                    txt_alpha = 1.0
-                frame_img = add_scene_text(frame_img, text_scene, txt_alpha)
+                    ta = 1.0
+                frame = add_text(frame, txt_sc, ta)
 
-            # Flash de transición saliente (últimos FADE_FRAMES)
-            if f >= n_frames - FADE_FRAMES and scene_idx < len(SCENES) - 1:
-                ft = (f - (n_frames - FADE_FRAMES)) / FADE_FRAMES
-                flash_arr = flash_frame(ft * 0.5, style="white")
-                frame_arr = np.array(frame_img, dtype=np.float32)
-                frame_arr = frame_arr * (1 - ft * 0.6) + flash_arr * (ft * 0.6)
-                frame_img = Image.fromarray(frame_arr.astype(np.uint8))
+            # Flash de salida
+            if f >= nf - FADE_F and si < len(SCENES) - 1:
+                ft    = (f - (nf - FADE_F)) / FADE_F
+                fl    = flash_frame(ft * 0.5, intensity=0.60)
+                fa    = np.array(frame, dtype=np.float32)
+                blend = fa * (1 - ft * 0.55) + fl * (ft * 0.55)
+                frame = Image.fromarray(blend.astype(np.uint8))
 
-            writer.append_data(np.array(frame_img))
-            frame_count += 1
+            writer.append_data(np.array(frame))
+            fc += 1
 
-            if frame_count % 60 == 0:
-                pct = frame_count / total_frames * 100
+            if fc % 60 == 0:
+                pct = fc / total_frames * 100
                 bar = "█" * int(pct / 4) + "░" * (25 - int(pct / 4))
-                print(f"      [{bar}] {pct:.0f}%  ({frame_count}/{total_frames} frames)",
+                print(f"      [{bar}] {pct:.0f}%  ({fc}/{total_frames})",
                       end="\r", flush=True)
 
     writer.close()
-    print(f"\n\n[4/4] ✓ Video exportado → {OUTPUT_PATH}")
-    print(f"      Frames totales : {frame_count}")
-    print(f"      Duración       : {frame_count / FPS:.1f}s")
-    print(f"      Resolución     : {WIDTH}×{HEIGHT} px  (9:16)")
-    print("═" * 60)
-    print("  Listo para subir a TikTok Ads, Instagram Reels y Meta Ads")
-    print("═" * 60)
+    mb = os.path.getsize(OUTPUT) / 1_048_576
+    print(f"\n\n[4/4] ✓ Exportado → {OUTPUT}")
+    print(f"      Frames   : {fc}")
+    print(f"      Duración : {fc / FPS:.1f} s")
+    print(f"      Tamaño   : {mb:.1f} MB")
+    print(f"      Resolución: {W}×{H} (9:16)")
+    print("═" * 62)
+    print("  Listo → TikTok Ads · Instagram Reels · Meta Ads")
+    print("═" * 62)
 
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 #  ENTRY POINT
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Buscar imágenes en la carpeta images/
-    supported = (".jpg", ".jpeg", ".png", ".webp")
+    exts  = (".jpg", ".jpeg", ".png", ".webp")
     found = sorted([
-        os.path.join(IMAGES_DIR, f)
-        for f in os.listdir(IMAGES_DIR)
-        if f.lower().endswith(supported)
+        os.path.join(IMGDIR, f)
+        for f in os.listdir(IMGDIR)
+        if f.lower().endswith(exts)
     ])
 
-    if len(found) < 2:
-        print("ERROR: Coloca al menos 2 imágenes en la carpeta images/")
-        print("       Nombre sugerido: img1.jpg, img2.jpg, img3.jpg, img4.jpg, img5.jpg")
+    if not found:
+        print(f"ERROR: No hay imágenes en {IMGDIR}/")
         sys.exit(1)
 
-    # Si hay menos de 5, repetir cíclicamente
     while len(found) < 5:
         found += found
-    image_paths = found[:5]
+    paths = found[:5]
 
-    print(f"\nImágenes detectadas: {len(image_paths)}")
-    for p in image_paths:
+    print(f"\nImágenes ({len(paths)}):")
+    for p in paths:
         print(f"  · {p}")
     print()
 
-    generate_ad(image_paths)
+    generate(paths)
