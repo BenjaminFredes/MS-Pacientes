@@ -1,0 +1,7 @@
+# Imágenes originales (subir manualmente, son privadas)
+images/
+# Videos de output (son grandes, compartir por Drive/WeTransfer)
+output/
+# Cache de Python
+__pycache__/
+*.pyc
